@@ -37,14 +37,15 @@ $java_home = "C:\Program Files\Java\jre1.6.0_21"
 
 # Java development kit can't be gotten direct from Oracle so get it from a
 # local repository
-#$jdk_installer_uri = "http://irish.lab.bos.redhat.com/pub/mlamouri/rhevm-install/data/jdk-6u21-windows-x64.exe"
-#$jdk_file = ($jdk_installer_uri -split "/")[-1]
-#$jdk_path = $download_root + $jdk_file
-#$jdk_event_match = "Java(TM) SE Devel"	
-#$java_home = "C:\Program Files\Java\jdk1.6.0_21"
+$jdk_installer_uri = "http://irish.lab.bos.redhat.com/pub/mlamouri/rhevm-install/data/jdk-6u21-windows-x64.exe"
+$jdk_file = ($jdk_installer_uri -split "/")[-1]
+$jdk_path = $download_root + $jdk_file
+$jdk_event_match = "Java(TM) SE Devel"	
+$java_home = "C:\Program Files\Java\jdk1.6.0_21"
 
 #$tomcat_uri = "http://mirror.cc.columbia.edu/pub/software/apache/tomcat/tomcat-5/v5.5.30/bin/apache-tomcat-5.5.30.exe"
 $tomcat_uri = "http://irish.lab.bos.redhat.com/pub/mlamouri/rhevm-install/data/apache-tomcat-5.5.30.zip"
+$tomcat_uri = "http://irish.lab.bos.redhat.com/pub/mlamouri/rhevm-install/data/apache-tomcat-6.0.29-windows-x64.zip"
 $tomcat_dname = "CN=cluster-rhevm.cloud.lab.eng.bos.redhat.com, OU=Emerging Technologies (Cloud), O=Red Hat, L=Westford, ST=Massachusetts, C=US"
 
 $jboss_version = "5.1.0.GA"
@@ -278,6 +279,9 @@ function Install_JDK {
         [Environment]::SetEnvironmentVariable("JAVA_HOME", $java_home, "Machine")
         [Environment]::SetEnvironmentVariable("JAVA_HOME", $java_home)
 
+        $env:JAVA_OPTS = "-server"
+        [Environment]::SetEnvironmentVariable("JAVA_OPTS", $env:JAVA_OPTS, "Machine")
+
 	verbose "Appending JDK bin to PATH"
 	$env:Path += ";$java_home\bin"
 	[Environment]::SetEnvironmentVariable("Path", $env:Path, 'Machine')
@@ -333,7 +337,10 @@ function Install_Tomcat {
     $tomcat_dir = $zip_folder.items() | foreach {$_.Name}
     $tomcat_root = $target_dir_name + $tomcat_dir
 
-    debug "TOMCAT_HOME = $tomcat_root"
+    debug "CATALINA_HOME = $tomcat_root"
+
+    $env:CATALINA_HOME = $tomcat_root
+    [Environment]::SetEnvironmentVariable("CATALINA_HOME", $tomcat_root, "Machine")
     return $tomcat_root
 
 }
@@ -367,30 +374,69 @@ function Enable_Tomcat_SSL {
 
     debug "reading $tomcat_server_xml_orig"
 
+    # Modify the tomcat server.xml to allow SSL only
+
     $fin = [System.IO.File]::OpenText($tomcat_server_xml_orig)
+
+
+    # This next is a fairly complicated piece of code to do a fairly simple
+    # thing.
+    # Comment out the Connectors on port 8080 and 8009
+    # Uncomment the Connector on port 8443
+    # Add the keystoreFile and keystorePass attributes to the SSL Connector
+
+    $port = $null
     $begin = $false
     $end = $false
+    $comment = $false
+    $addcomment = $false
+    $uncomment = $false
 
     $out = while ($fin.Peek() -ne -1) {
-    	$line = $fin.ReadLine()
+        $line = $fin.ReadLine()
 
-	MAL TODO: Work this for the tomcat server.xml
-    	# find the beginning of the commented SSL section
-    	if (-not $begin -and $line -match "<!-- SSL/TLS Connector") {
-      	    $begin = $true
-      	    $line = $line + " -->"
-    	} elseif ($begin -and -not $end) {
-      	    if  ($line -match "-->$") {
-                $end = $true
+        if ($line -match "<!--") { $comment = $true }
+
+        if ($line -match "-->") {
+            if ($uncomment) { 
                 $line = $line -replace "-->", "<!-- -->"
-       	    } else {
-                $line = $line -replace 'keystorePass="[^"]+"', ('keystorePass="' + $key_pass + '"')
-	 	$line = $line -replace 'keystoreFile="[^"]+"', ('keystoreFile="${jboss.server.home.dir}/conf/' + $key_store + '"')
-       	    }       
-    	}
-        $line
+                $uncomment = $false
+            }
+            $comment = $false
+        }
+
+        if ($line -match "<Connector port=`"(\d+)`"") {
+            $port = $matches[1]
+            $begin = $true
+
+            if ($port -eq "8080" -or $port -eq "8009") {
+	        $line =  "    <!--`n" + $line
+                $addcomment = $true
+            }
+
+            if ($port -eq "8443" -and $comment) {
+                $line = "    -->`n" + $line
+                $uncomment = $true
+
+                # Add the keystore information
+                $line += "`n               keystoreFile=`"conf/ssl.keystore`" keystorePass=`"notsecure`""
+            }
+        }
+
+        if ($begin -and $line -match "/>") {
+            if ($addcomment) { $line += "`n    -->" }
+            $addcomment = $false
+            $end = $true
+        }
+
+        if ($begin -and $end) {
+            $begin = $false
+            $end = $false
+        }
+        $line 
     }
     $fin.Close()
+
     debug "writing $tomcat_server_xml"
 
     # Jboss and Tomcat like unix line terminators.  
@@ -415,7 +461,7 @@ function Enable_Tomcat_SSL {
 }
 
 function Enable_Tomcat_Service {
-
+    & $env:CATALINA_HOME\bin\service.bat install
 }
 
 
@@ -470,15 +516,15 @@ function Install_JBoss {
     # Add a firewall rule to allow JBoss access
     debug "adding Jboss firewall rule"
     $fw = new-object -comObject HNetCfg.FwPolicy2
-    $jbossrule = new-object -comObject HNetCfg.FwRule
-    $jbossrule.Name = "JBoss AS (Tcp-In)"
-    $jbossrule.Description = "JBoss Application Server Inbound Access"
-    $jbossrule.Protocol = 6 # TCP
-    $jbossrule.LocalPorts = "8109,8180,8543"
-    $jbossrule.Direction = 1 # Inbound
-    $jbossrule.Action = 1 # Allow
-    if ($liverun) { $fw.Rules.Add($jbossrule) }
-    $jbossrule.Enabled = $true
+    $fwrule = new-object -comObject HNetCfg.FwRule
+    $fwrule.Name = "JBoss AS (Tcp-In)"
+    $fwrule.Description = "JBoss Application Server Inbound Access"
+    $fwrule.Protocol = 6 # TCP
+    $fwrule.LocalPorts = "8109,8180,8543"
+    $fwrule.Direction = 1 # Inbound
+    $fwrule.Action = 1 # Allow
+    if ($liverun) { $fw.Rules.Add($fwrule) }
+    $fwrule.Enabled = $true
 
     # add JBOSS to the end of PATH
     debug "Adding $jboss_home\bin to Path" 
@@ -615,12 +661,12 @@ function Check_JBoss_Service {
 function Deploy_RHEVM_API {
     param($rhevm_api_war_uri, 
           $jboss_service = "default", 
-          $rhevm_api_deploy_file = "rhevm-api-powershell.war")
+          $rhevm_api_deploy_file = "rhevm-powershell-api.war")
 
     $rhevm_api_war_file = ($rhevm_api_war_uri -split "/")[-1]
     $rhevm_api_war_path = $download_root + $rhevm_api_war_file
 
-    $jboss_deploy_root = $env:JBOSS_HOME + "\server\" + $jboss_service + "\deploy\"
+    $jboss_deploy_root = $env:CATALINA_HOME + "\webapps\"
 
     $rhevm_api_deploy_path = $jboss_deploy_root + $rhevm_api_deploy_file
 
@@ -643,18 +689,19 @@ function Setup_Rhevm {
     $parts = ("iis", "dotnet", "rhevm", "jre", "jdk", "tomcat", "jboss", "ssl", "service", "api")
 
     # Add feature IIS
-#    Install_IIS
-#    Check_IIS
-#    Install_RHEVM $rhevm_installer_uri $rhevm_config_uri
-#    Check_RHEVM
+    Install_IIS
+    Check_IIS
+    Install_RHEVM $rhevm_installer_uri $rhevm_config_uri
+    Check_RHEVM
 
 #    Install_JRE $jre_installer_uri
+    Install_JDK $jdk_installer_uri
+
     $tomcat_root = Install_Tomcat $tomcat_uri
     Enable_Tomcat_SSL $tomcat_root -dname $tomcat_dname
     Enable_Tomcat_Service $tomcat_root
 
-#    Install_JDK $jdk_installer_uri
-#    Check_JDK
+    Check_JDK
 #    Install_JBoss $jboss_zip_uri
 #    Check_JBoss
 #    Enable_JBoss_SSL -DName $jboss_dname
@@ -664,8 +711,8 @@ function Setup_Rhevm {
 #    Check_JBoss_Service
 
 
-#    Deploy_RHEVM_API $rhevm_api_war_uri
-#    Check_RHEVM_API
+    Deploy_RHEVM_API $rhevm_api_war_uri
+    Check_RHEVM_API
 
     debug "RHEVM Setup Complete"
 }
