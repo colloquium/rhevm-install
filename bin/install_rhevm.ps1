@@ -58,7 +58,7 @@ $jboss_dname = "CN=cluster-rhevm.cloud.lab.eng.bos.redhat.com, OU=Emerging Techn
 
 $jboss_service_uri = "http://irish.lab.bos.redhat.com/pub/mlamouri/rhevm-install/data/jboss-native-2.0.9-windows-x64-ssl.zip"
 
-$rhevm_api_war_uri = "http://repo2.maven.org/maven2/com/redhat/rhevm/api/rhevm-api-powershell-webapp/0.9-milestone2.1/rhevm-api-powershell-webapp-0.9-milestone2.1.war"
+$rhevm_api_war_uri = "http://repo2.maven.org/maven2/com/redhat/rhevm/api/rhevm-api-powershell-webapp/0.9-milestone3.1/rhevm-api-powershell-webapp-0.9-milestone3.1.war"
 
 # ============================================================================
 # Utility functions
@@ -342,7 +342,6 @@ function Install_Tomcat {
     $env:CATALINA_HOME = $tomcat_root
     [Environment]::SetEnvironmentVariable("CATALINA_HOME", $tomcat_root, "Machine")
     return $tomcat_root
-
 }
 
 function Enable_Tomcat_SSL {
@@ -409,6 +408,9 @@ function Enable_Tomcat_SSL {
             $port = $matches[1]
             $begin = $true
 
+            # Reset the connector protocol
+	    $line = $line -replace 'protocol="HTTP/1.1"', 'protocol="org.apache.coyote.http11.Http11Protocol"'
+
             if ($port -eq "8080" -or $port -eq "8009") {
 	        $line =  "    <!--`n" + $line
                 $addcomment = $true
@@ -419,7 +421,7 @@ function Enable_Tomcat_SSL {
                 $uncomment = $true
 
                 # Add the keystore information
-                $line += "`n               keystoreFile=`"conf/ssl.keystore`" keystorePass=`"notsecure`""
+                $line += "`n               keystoreFile=`"conf/ssl.keystore`" keystorePass=`"notsecure`" keyAlias=`"tomcat`"" 
             }
         }
 
@@ -460,8 +462,30 @@ function Enable_Tomcat_SSL {
     $fwrule.Enabled = $true
 }
 
+
+function Enable_Tomcat_Manager {
+    param($userfile = (${env:$CATALINA_HOME} + "\conf\tomcat-users.xml"))
+
+    
+}
+
 function Enable_Tomcat_Service {
-    & $env:CATALINA_HOME\bin\service.bat install
+
+    # Install the service
+    $result = & ${env:CATALINA_HOME}\bin\service.bat install
+
+    write-host $result
+
+    $result[0] -match "Installing the service '(\w+)'"
+    $serviceName = $matches[1]
+
+    # Enable the service on boot
+    verbose "Enabling $serviceName on startup"
+    Set-Service $serviceName -startupType automatic
+
+
+    # Start the service
+    net start $serviceName
 }
 
 
@@ -594,7 +618,13 @@ function Enable_JBoss_SSL {
                 $end = $true
                 $line = $line -replace "-->", "<!-- -->"
        	    } else {
+
+	        # Replace the default protocol so SSL works
+	    	$line = $line -replace 'protocol="HTTP/1.1"', 'protocol="org.apache.coyote.http11.Http11Protocol"'
+                # Set the key store password
                 $line = $line -replace 'keystorePass="[^"]+"', ('keystorePass="' + $key_pass + '"')
+
+                # Locate the keystore file
 	 	$line = $line -replace 'keystoreFile="[^"]+"', ('keystoreFile="${jboss.server.home.dir}/conf/' + $key_store + '"')
        	    }       
     	}
@@ -696,12 +726,12 @@ function Setup_Rhevm {
 
 #    Install_JRE $jre_installer_uri
     Install_JDK $jdk_installer_uri
+    Check_JDK
 
     $tomcat_root = Install_Tomcat $tomcat_uri
     Enable_Tomcat_SSL $tomcat_root -dname $tomcat_dname
     Enable_Tomcat_Service $tomcat_root
 
-    Check_JDK
 #    Install_JBoss $jboss_zip_uri
 #    Check_JBoss
 #    Enable_JBoss_SSL -DName $jboss_dname
