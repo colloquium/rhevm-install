@@ -474,15 +474,12 @@ function Enable_Tomcat_Service {
     # Install the service
     $result = & ${env:CATALINA_HOME}\bin\service.bat install
 
-    write-host $result
-
     $result[0] -match "Installing the service '(\w+)'"
     $serviceName = $matches[1]
 
     # Enable the service on boot
     verbose "Enabling $serviceName on startup"
     Set-Service $serviceName -startupType automatic
-
 
     # Start the service
     net start $serviceName
@@ -730,8 +727,6 @@ function Setup_Rhevm {
 
     $tomcat_root = Install_Tomcat $tomcat_uri
     Enable_Tomcat_SSL $tomcat_root -dname $tomcat_dname
-    Enable_Tomcat_Service $tomcat_root
-
 #    Install_JBoss $jboss_zip_uri
 #    Check_JBoss
 #    Enable_JBoss_SSL -DName $jboss_dname
@@ -743,6 +738,8 @@ function Setup_Rhevm {
 
     Deploy_RHEVM_API $rhevm_api_war_uri
     Check_RHEVM_API
+
+    Enable_Tomcat_Service $tomcat_root
 
     debug "RHEVM Setup Complete"
 }
