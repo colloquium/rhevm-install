@@ -1,0 +1,103 @@
+
+To use DNS names, modify /etc/resolve.conf:
+
+search cloud.lab.eng.bos.redhat.com lab.bos.redhat.com redhat.com
+nameserver 10.16.137.252
+...
+
+
+VM host: 10.16.137.244 (blade14.cloud.lab.bos.redhat.com)
+RHEVM Host: 10.16.137.103 (cluster-rhevm.cloud.lab.bos.redhat.com)
+
+Resources:
+
+  * Install Script
+    http://irish.lab.bos.redhat.com/pub/mlamouri/rhevm-install/bin/install_rhevm.ps1
+
+  * RHEVM Installer
+    http://irish.lab.bos.redhat.com/pub/projects/cloud/resources/RHEV22u2/RHEVM_47069.exe
+
+  * RHEVM Installer Answer File
+     http://irish.lab.bos.redhat.com/pub/mlamouri/rhevm-install/data/rhevm_2.2u2.iss
+
+  * Java Development Kit binary
+     http://irish.lab.bos.redhat.com/pub/mlamouri/rhevm-install/data/jdk-6u21-windows-x64.exe
+
+  * Tomcat Tarball
+    http://irish.lab.bos.redhat.com/pub/mlamouri/rhevm-install/data/apache-tomcat-6.0.29-windows-x64.zip
+
+  * SSL X509 certificate Distinguished Name
+      CN=cluster-rhevm.cloud.lab.eng.bos.redhat.com, OU=Emerging Technologies (Cloud), O=Red Hat, L=Westford, ST=Massachusetts, C=US
+
+
+  * RHEVM-API web application file
+     http://repo2.maven.org/maven2/com/redhat/rhevm/api/rhevm-api-powershell-webapp/0.9-milestone3.1/rhevm-api-powershell-webapp-0.9-milestone3.1.war
+
+# log a session into the VM host
+# Establish VNC port forwarding
+ssh blade14 -L5900:localhost:5900
+
+# work in the VM images work space
+blade14# cd /mnt/twoblade/images
+
+
+# Find the name of the RHEVM guest
+blade14# sudo virsh list --all
+ Id Name                 State
+----------------------------------
+121 cluster-rhevm        running
+  - win2k8-20100803      shut off
+  - win2k8-clean         shut off
+  - win2k8-cygwin        shut off
+
+# shut down the guest
+blade14# sudo virsh destroy cluster-rhevm
+Domain cluster-rhevm destroyed
+
+# remove the guest definition
+blade14# sudo virsh undefine cluster-rhevm
+Domain cluster-rhevm has been undefined
+
+# unpack the clean compressed Win2k8 image
+blade14# gunzip -c cluster-rhevm.img.gz > cluster-rhevm.img
+
+# create the VM configuration from the image
+blade14# sudo virt-install -n cluster-rhevm -r 4096 --vcpus=2 --cpuset=auto --os-type=windows --os-variant=win2k8 --accelerate --network=bridge:br0 --vnc --disk path=/mnt/twoblade/images/cluster-rhevm.img --import --noautoconsole --wait=-1 --noreboot
+
+# start the VM
+blade14# sudo virsh start cluster-rhevm
+Domain cluster-rhevm started
+
+# right now the script can't run from cygwin ssh, so it must be run
+# via Remote Desktop or VNC to the VM console.
+# On your local box run VNC through the tunnel created
+desktop# vncviewer localhost &
+
+# Log in as 'Administrator', password '24^gold'
+# start a powershell session
+# cd to C:\saved
+PS> cd c:\saved
+
+# download the script.  Pick one of the next two options
+# if cygwin wget is available:
+PS> wget http://irish.lab.bos.redhat.com/pub/mlamouri/rhevm-install/bin/install_rhevm.ps1
+
+# using powershell
+PS> $wc = new-object net.webclient
+PS> $wc.DownloadFile("http://irish.lab.bos.redhat.com/pub/mlamouri/rhevm-install/bin/install_rhevm.ps1", "C:\saved\install_rhevm.ps1")
+
+# run the install script
+PS> c:\saved\install_rhevm.ps1 -Debug -Verbose
+
+
+# bug 85 on rhevm-api indicates that the web service will fail if Tomcat
+# is run as a service.  Until it's fixed, stop the service and start it in
+# a CLI shell.
+PS> net stop tomcat6
+PS> C:\apache-tomcat-6.0.20\bin\startup.bat
+
+
+#finally, verify that the API is running by issuing a query from your desktop
+desktop#  curl --insecure --user admin@CLUSTER-RHEVM:24^gold https://cluster-rhevm:8443/rhevm-powershell-api/
+
+

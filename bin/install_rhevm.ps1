@@ -11,7 +11,12 @@
 #
 
 param([switch] $debug, [switch] $verbose, [switch] $revert, [switch] $dryrun,
-      $logfile=$null, $installparts = "all", $checkparts = "all")
+      $config=$null, $logfile=$null, $installparts="all", $checkparts="all",
+      $sheduled=$null)
+
+$EventLog = New-Object System.Diagnostics.EventLog('Application')
+$EventLog.MachineName = "."
+$EventLog.Source = "RhevmInstallation"
 
 if ($logfile) {
   Start-Transcript -Path $logfile
@@ -23,42 +28,73 @@ $liverun = -not $dryrun
 $wc = new-object net.webclient
 $sh = new-object -comObject shell.application
 
-$download_root = "C:\saved\"
+[xml] $cfg_template = "
+<rhevminstall>
+  <download_root>C:\saved\</download_root>
+  <rhevm>
+    <uri name='installer'></uri>
+    <uri name='config'></uri>
+  </rhevm>
+  <jre>
+    <uri name='installer'></uri>
+  </jre>
+  <jdk>
+    <uri name='installer'></uri>
+  </jdk>
+  <tomcat>
+    <uri name='zip'></uri>
+  </tomcat>
+  <jboss>
+    <uri name='zip'></uri>
+  </jboss>
+  <certdn></certdn>
+  <rhevmapi>
+    <uri name='war'></uri>
+  </rhevmapi>
+</rhevminstall>
+"
 
-# Application Variables
-$rhevm_installer_uri = "http://irish.lab.bos.redhat.com/pub/projects/cloud/resources/RHEV22u2/RHEVM_47069.exe"
-$rhevm_config_uri = "http://irish.lab.bos.redhat.com/pub/mlamouri/rhevm-install/data/rhevm_2.2u2.iss"
-
-$jre_installer_uri = "http://irish.lab.bos.redhat.com/pub/mlamouri/rhevm-install/data/jre-6u21-windows-x64.exe"
-$jrk_file = ($jdk_installer_uri -split "/")[-1]
-$jre_path = $download_root + $jdk_file
-$jre_event_match = "Java(TM) SE"	
-$java_home = "C:\Program Files\Java\jre1.6.0_21"
-
-# Java development kit can't be gotten direct from Oracle so get it from a
-# local repository
-$jdk_installer_uri = "http://irish.lab.bos.redhat.com/pub/mlamouri/rhevm-install/data/jdk-6u21-windows-x64.exe"
-$jdk_file = ($jdk_installer_uri -split "/")[-1]
-$jdk_path = $download_root + $jdk_file
-$jdk_event_match = "Java(TM) SE Devel"	
-$java_home = "C:\Program Files\Java\jdk1.6.0_21"
-
-#$tomcat_uri = "http://mirror.cc.columbia.edu/pub/software/apache/tomcat/tomcat-5/v5.5.30/bin/apache-tomcat-5.5.30.exe"
-$tomcat_uri = "http://irish.lab.bos.redhat.com/pub/mlamouri/rhevm-install/data/apache-tomcat-5.5.30.zip"
-$tomcat_uri = "http://irish.lab.bos.redhat.com/pub/mlamouri/rhevm-install/data/apache-tomcat-6.0.29-windows-x64.zip"
-$tomcat_dname = "CN=cluster-rhevm.cloud.lab.eng.bos.redhat.com, OU=Emerging Technologies (Cloud), O=Red Hat, L=Westford, ST=Massachusetts, C=US"
-
-$jboss_version = "5.1.0.GA"
-$jboss_zip = "jboss-" + $jboss_version + "-jdk6.zip"
-#$jboss_zip_uri = "http://sourceforge.net/projects/jboss/files/JBoss/JBoss-" + $jboss_version + "/" + $jboss_zip + "/download"
-$jboss_zip_uri = "http://irish.lab.bos.redhat.com/pub/mlamouri/rhevm-install/data/" + $jboss_zip
-
-$jboss_dname = "CN=cluster-rhevm.cloud.lab.eng.bos.redhat.com, OU=Emerging Technologies (Cloud), O=Red Hat, L=Westford, ST=Massachusetts, C=US"
-#$jboss_service_uri = "http://downloads.jboss.org/jbossnative/2.0.9.GA/jboss-native-2.0.9-windows-x64-ssl.zip"
-
-$jboss_service_uri = "http://irish.lab.bos.redhat.com/pub/mlamouri/rhevm-install/data/jboss-native-2.0.9-windows-x64-ssl.zip"
-
-$rhevm_api_war_uri = "http://repo2.maven.org/maven2/com/redhat/rhevm/api/rhevm-api-powershell-webapp/0.9-milestone3.1/rhevm-api-powershell-webapp-0.9-milestone3.1.war"
+[xml] $cfg_default = "
+<rhevminstall>
+  <download_root>C:\saved\</download_root>
+  <rhevm>
+    <uri name='installer'>
+        http://irish.lab.bos.redhat.com/pub/projects/cloud/resources/RHEV22u2/RHEVM_47069.exe
+    </uri>
+    <uri name='config'>
+        http://irish.lab.bos.redhat.com/pub/mlamouri/rhevm-install/data/rhevm_2.2u2.iss
+    </uri>
+  </rhevm>
+  <jre>
+    <uri name='installer'>
+        http://irish.lab.bos.redhat.com/pub/mlamouri/rhevm-install/data/jre-6u21-windows-x64.exe
+    </uri>
+  </jre>
+  <jdk>
+    <uri name='installer'>
+        http://irish.lab.bos.redhat.com/pub/mlamouri/rhevm-install/data/jdk-6u21-windows-x64.exe
+    </uri>
+  </jdk>
+  <tomcat>
+    <uri name='zip'>
+        http://irish.lab.bos.redhat.com/pub/mlamouri/rhevm-install/data/apache-tomcat-6.0.29-windows-x64.zip
+    </uri>
+  </tomcat>
+  <jboss>
+    <uri name='zip'>
+        http://irish.lab.bos.redhat.com/pub/mlamouri/rhevm-install/data/jboss-5.1.0.GA-jdk6.zip
+    </uri>
+  </jboss>
+  <certdn>
+        CN=cluster-rhevm.cloud.lab.eng.bos.redhat.com, OU=Emerging Technologies (Cloud), O=Red Hat, L=Westford, ST=Massachusetts, C=US
+  </certdn>
+  <rhevmapi>
+    <uri name='war'>
+        http://repo2.maven.org/maven2/com/redhat/rhevm/api/rhevm-api-powershell-webapp/0.9-milestone3.1/rhevm-api-powershell-webapp-0.9-milestone3.1.war
+    </uri>
+  </rhevmapi>
+</rhevminstall>
+"
 
 # ============================================================================
 # Utility functions
@@ -104,10 +140,19 @@ function unzip {
   }
 }
 
+function schedule {
+    # add scheduled job
+
+    # execute scheduled job
+
+    # remove scheduled job
+}
 #
 #
 #
 function Install_IIS {
+
+    $EventLog.WriteEntry("IIS/.Net installation begins","Information", 10001)
 
     Import-Module ServerManager
     (Get-Module ServerManager).ExportCmdlets
@@ -116,6 +161,8 @@ function Install_IIS {
     if ($liverun) { Add-WindowsFeature Web-Server }
     verbose "Installing .Net"
     if ($liverun) { Add-WindowsFeature Net-Framework }
+
+    #$EventLog.WriteEntry("IIS/.Net installation complete","Information", 10002)
 }
 
 function Check_IIS {
@@ -144,6 +191,8 @@ function Check_IIS {
 function Install_RHEVM {
     param ($installer_uri, $config_uri)
 
+    $EventLog.WriteEntry("RHEVM installation begins","Information", 10001)
+
     # get the file name from the end of the URI
     $installer_file = ($installer_uri -split "/")[-1]
     $config_file = ($config_uri -split "/")[-1]
@@ -171,12 +220,15 @@ function Install_RHEVM {
         do {
             sleep $interval
             verbose -NoNewline "."
-        } until (Get-EventLog Application | where-object { ($_.TimeGenerated -gt $starttime -and $_.EventId -eq 1035 -and $_.Message -match "Red Hat Enterprise Virtualization Manager" -and $_.Message -match "Reconfiguration success or error status: 0") -or ((Get-Date) -gt $endtime) }
+        } until (Get-EventLog Application -ea SilentlyContinue | where-object { ($_.TimeGenerated -gt $starttime -and $_.EventId -eq 1035 -and $_.Message -match "Red Hat Enterprise Virtualization Manager" -and $_.Message -match "Reconfiguration success or error status: 0") -or ((Get-Date) -gt $endtime) }
         )
         verbose ""
    	verbose ("Elapsed Time: " + ([int] (((Get-Date).Subtract($starttime)).TotalSeconds)) + " Seconds")
        
     }
+
+    $EventLog.WriteEntry("RHEVM installation complete","Information", 10002)
+
 }
 
 function Check_RHEVM {
@@ -197,6 +249,8 @@ function Check_RHEVM {
 
 function Install_JRE {
     param($jre_installer_uri)
+
+    $EventLog.WriteEntry("JRE installation begins","Information", 10001)
 
     $jre_installer_file = ($jre_installer_uri -split "/")[-1]
     $jre_installer_path = $download_root + $jre_installer_file
@@ -241,10 +295,15 @@ function Install_JRE {
 	[Environment]::SetEnvironmentVariable("Path", $env:Path, 'Machine')
 
     }
+
+    $EventLog.WriteEntry("JRE installation complete","Information", 10002)
+
 }
 
 function Install_JDK {
     param($jdk_installer_uri)
+
+    $EventLog.WriteEntry("JDK installation begins","Information", 10001)
 
     $jdk_installer_file = ($jdk_installer_uri -split "/")[-1]
     $jdk_installer_path = $download_root + $jdk_installer_file
@@ -286,6 +345,9 @@ function Install_JDK {
 	$env:Path += ";$java_home\bin"
 	[Environment]::SetEnvironmentVariable("Path", $env:Path, 'Machine')
     }
+
+    $EventLog.WriteEntry("JDK installation complete","Information", 10002)
+
 }
 
 function Check_JDK {
@@ -309,7 +371,7 @@ function Check_JDK {
 
     # JAVA_HOME in the path?
     $plist = $env:Path -split ";"
-    if ($plist -contains ($JAVA_HOME + "\bin")) {
+    if ($plist -contains ($env:JAVA_HOME + "\bin")) {
         verbose "CHECK: PATH contains JAVA_HOME"
     } else {
         error "PATH does not contain JAVA_HOME: Path = $env:Path"
@@ -320,6 +382,8 @@ function Check_JDK {
 
 function Install_Tomcat {
     param($tomcat_zip_uri, $target_dir_name = "C:\")
+
+    $EventLog.WriteEntry("Tomcat installation begins","Information", 10001)
 
     $tomcat_zip_file = ($tomcat_uri -split "/")[-1]
     $tomcat_zip_path = $download_root + $tomcat_zip_file
@@ -341,12 +405,21 @@ function Install_Tomcat {
 
     $env:CATALINA_HOME = $tomcat_root
     [Environment]::SetEnvironmentVariable("CATALINA_HOME", $tomcat_root, "Machine")
+
+    $EventLog.WriteEntry("Tomcat installation complete","Information", 10002)
+
     return $tomcat_root
 }
 
 function Enable_Tomcat_SSL {
-    param($tomcat_root, $dname, $keypass="notsecure")
+    param($dname, $tomcat_root=$null, $keypass="notsecure")
 
+    $EventLog.WriteEntry("Tomcat SSL installation begins","Information", 10001)
+
+    if ($tomcat_root -eq $null) {
+      $tomcat_root = $env:CATALINA_HOME
+    }
+    debug "tomcat_root = $tomcat_root"
     $tomcat_conf_dir = $tomcat_root + "\conf\"
     # Key Generation Variable
     $keytool = $env:JAVA_HOME + "\bin\keytool.exe"
@@ -460,6 +533,9 @@ function Enable_Tomcat_SSL {
     $fwrule.Action = 1 # Allow
     if ($liverun) { $fw.Rules.Add($fwrule) }
     $fwrule.Enabled = $true
+
+    $EventLog.WriteEntry("Tomcat SSL installation complete","Information", 10002)
+
 }
 
 
@@ -470,6 +546,8 @@ function Enable_Tomcat_Manager {
 }
 
 function Enable_Tomcat_Service {
+
+    $EventLog.WriteEntry("Tomcat Service installation begins","Information", 10001)
 
     # Install the service
     $result = & ${env:CATALINA_HOME}\bin\service.bat install
@@ -483,6 +561,9 @@ function Enable_Tomcat_Service {
 
     # Start the service
     net start $serviceName
+
+    $EventLog.WriteEntry("Tomcat Service installation complete","Information", 10002)
+
 }
 
 
@@ -690,6 +771,8 @@ function Deploy_RHEVM_API {
           $jboss_service = "default", 
           $rhevm_api_deploy_file = "rhevm-powershell-api.war")
 
+    $EventLog.WriteEntry("RHEVM REST API installation begins","Information", 10001)
+
     $rhevm_api_war_file = ($rhevm_api_war_uri -split "/")[-1]
     $rhevm_api_war_path = $download_root + $rhevm_api_war_file
 
@@ -702,6 +785,9 @@ function Deploy_RHEVM_API {
     
     debug "Copying $rhevm_api_war_path to $rhevm_api_deploy_path"
     if ($liverun) { copy $rhevm_api_war_path $rhevm_api_deploy_path }
+
+    $EventLog.WriteEntry("RHEVM REST API installation begins","Information", 10002)
+
 }
 
 function Check_RHEVM_API {
@@ -713,20 +799,64 @@ function Setup_Rhevm {
 
     debug "Setting up RHEVM"
 
-    $parts = ("iis", "dotnet", "rhevm", "jre", "jdk", "tomcat", "jboss", "ssl", "service", "api")
+    $parts = ("iis", "rhevm", "jre", "jdk", "tomcat", "jboss", "ssl", "service", "api")
+
+    if ($installparts -eq "all") {
+        $installparts = $parts
+    } else {
+        $installparts = $installparts.split(",")
+    }      
+
+    debug "Installing $installparts" 
+
+    if ($config -match "^https?://") {
+        # download it into $cfg
+        # TODO - trap an error
+	[xml] $cfg = $wc.DownloadString($config)
+    } elseif ($config) {
+        # TODO - trap an error
+        [xml] $cfg = get-content $config
+    } else {
+        $cfg = $cfg_default
+    }
+
+    debug "download_root = $cfg.rhevminstall.download_root"
+    $download_root = $cfg.rhevminstall.download_root.trim()
+    # TRAP - $null or not string
 
     # Add feature IIS
-    Install_IIS
-    Check_IIS
-    Install_RHEVM $rhevm_installer_uri $rhevm_config_uri
-    Check_RHEVM
+    if ($installparts -contains "iis") { 
+        Install_IIS
+        Check_IIS
+    }
+
+    if ($installparts -contains "rhevm") {
+        $rhevm_installer_uri = $cfg.rhevminstall.rhevm.SelectSingleNode("uri[@name='installer']")."#text".trim()
+        $rhevm_config_uri = $cfg.rhevminstall.rhevm.SelectSingleNode("uri[@name='config']")."#text".trim()
+        Install_RHEVM $rhevm_installer_uri $rhevm_config_uri
+        Check_RHEVM
+    }
 
 #    Install_JRE $jre_installer_uri
-    Install_JDK $jdk_installer_uri
-    Check_JDK
+    if ($installparts -contains "jdk") {
+        $jdk_installer_uri = $cfg.rhevminstall.jdk.uri."#text".trim()
+        Install_JDK $jdk_installer_uri
+        # installing tomcat without JDK makes no sense
+        Check_JDK
+    }
+#   
+    if ($installparts -contains "tomcat") {
+        $tomcat_uri = $cfg.rhevminstall.tomcat.uri."#text".trim()
+        Install_Tomcat $tomcat_uri
+    }
 
-    $tomcat_root = Install_Tomcat $tomcat_uri
-    Enable_Tomcat_SSL $tomcat_root -dname $tomcat_dname
+    if ($installparts -contains "ssl") {
+        $dname = $cfg.rhevminstall.certdn.trim()
+        Enable_Tomcat_SSL -tomcat_home $env:CATALINA_HOME -dname $tomcat_dname
+    }
+
+    # check Tomcat
+
 #    Install_JBoss $jboss_zip_uri
 #    Check_JBoss
 #    Enable_JBoss_SSL -DName $jboss_dname
@@ -735,14 +865,27 @@ function Setup_Rhevm {
 #    #Enable_JBoss_Service
 #    Check_JBoss_Service
 
+    if ($installparts -contains "api") {
+        $rhevm_api_war_uri = $cfg.rhevminstall.rhevmapi.uri."#text".trim()
+        Deploy_RHEVM_API $rhevm_api_war_uri
+        Check_RHEVM_API
+    }
 
-    Deploy_RHEVM_API $rhevm_api_war_uri
-    Check_RHEVM_API
-
-    Enable_Tomcat_Service $tomcat_root
+    if ($installparts -contains "service") {
+        Enable_Tomcat_Service $env:CATALINA_HOME
+    }
 
     debug "RHEVM Setup Complete"
 }
 
 Setup_Rhevm
+
+# log completion event
+# Writing an event
+$EventLog.WriteEntry("RHEVM Installation Complete","Information", 10003)
+
+if ($logfile) {
+  Stop-Transcript
+}
+
 exit
